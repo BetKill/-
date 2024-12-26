@@ -1,76 +1,79 @@
 import json
 import numpy as np
-import skfuzzy as fuzz
-from skfuzzy import control as ctrl
 
-def task(temp_json, heating_json, rules_json, current_temp):
-    # Парсинг JSON-строк
-    temp_data = json.loads(temp_json)
-    heating_data = json.loads(heating_json)
-    rules_data = json.loads(rules_json)
 
-    # Создание лингвистической переменной температуры
-    temperature = ctrl.Antecedent(np.arange(0, 51, 1), 'temperature')
-    for term in temp_data['температура']:
-        points = [p[0] for p in term['points']]
-        if len(points) == 4:
-            temperature[term['id']] = fuzz.trapmf(temperature.universe, points)
-        else:
-            raise ValueError(f"Term '{term['id']}' must have exactly 4 points")
+def get_matrix(str_json: str):
+    clusters = [c if isinstance(c, list) else [c] for c in json.loads(str_json)]
+    n = sum(len(cluster) for cluster in clusters)
 
-    # Создание лингвистической переменной уровня нагрева
-    heating = ctrl.Consequent(np.arange(0, 11, 1), 'heating')
-    for term in heating_data['уровень нагрева']:
-        points = [p[0] for p in term['points']]
-        if len(points) == 4:
-            heating[term['id']] = fuzz.trapmf(heating.universe, points)
-        else:
-            raise ValueError(f"Term '{term['id']}' must have exactly 4 points")
+    matrix = [[1] * n for _ in range(n)]
 
-    # Создание правил управления
-    rules = []
-    for rule in rules_data['управление']:
-        antecedent = temperature[rule['if']]
-        consequent = heating[rule['then']]
-        rules.append(ctrl.Rule(antecedent, consequent))
+    worse = []
+    for cluster in clusters:
+        for worse_elem in worse:
+            for elem in cluster:
+                matrix[elem - 1][worse_elem - 1] = 0
+        for elem in cluster:
+            worse.append(int(elem))
 
-    # Создание и симуляция системы управления
-    heating_ctrl = ctrl.ControlSystem(rules)
-    heating_simulation = ctrl.ControlSystemSimulation(heating_ctrl)
+    return np.array(matrix)
 
-    # Установка текущей температуры и вычисление нагрева
-    heating_simulation.input['temperature'] = current_temp
-    heating_simulation.compute()
+def get_clusters(matrix, est1, est2):
+    clusters = {}
 
-    # Возвращение значения оптимального управления
-    return heating_simulation.output['heating']
+    num_rows = len(matrix)
+    num_cols = len(matrix[0])
+    excluded_rows = set()
+    for row in range(num_rows):
+        if row + 1 in excluded_rows:
+            continue
+        current_cluster = [row + 1]
+        clusters[row + 1] = current_cluster
+        for col in range(row + 1, num_cols):
+            if matrix[row][col] == 0:
+                current_cluster.append(col + 1)
+                excluded_rows.add(col + 1)
 
-# Пример использования функции
+    result = []
+    for k in clusters:
+        if not result:
+            result.append(clusters[k])
+            continue
+
+        for i, elem in enumerate(result):
+            sum_est1_elem = np.sum(est1[elem[0] - 1])
+            sum_est2_elem = np.sum(est2[elem[0] - 1])
+            sum_est1_k = np.sum(est1[k - 1])
+            sum_est2_k = np.sum(est2[k - 1])
+
+            if sum_est1_elem == sum_est1_k and sum_est2_elem == sum_est2_k:
+                for c in clusters[k]:
+                    result[i].append(c)
+                    break
+            if sum_est1_elem < sum_est1_k or sum_est2_elem < sum_est2_k:
+                result = result[:i] + clusters[k] + result[i:]
+                break
+
+        result.append(clusters[k])
+
+    final_result = [r[0] if len(r) == 1 else r for r in result]
+    return str(final_result)
+
+
+def task(string1, string2):
+    matrix1 = get_matrix(string1)
+    matrix2 = get_matrix(string2)
+
+    matrix_and = np.multiply(matrix1, matrix2)
+    matrix_and_t = np.multiply(np.transpose(matrix1), np.transpose(matrix2))
+
+    matrix_or = np.maximum(matrix_and, matrix_and_t)
+    clusters = get_clusters(matrix_or, matrix1, matrix2)
+    return clusters
+
+
 if __name__ == "__main__":
-    temp_json = '''{
-        "температура": [
-            {"id": "холодно", "points": [[0, 1], [18, 1], [22, 0], [50, 0]]},
-            {"id": "комфортно", "points": [[18, 0], [22, 1], [24, 1], [26, 0]]},
-            {"id": "жарко", "points": [[0, 0], [24, 0], [26, 1], [50, 1]]}
-        ]
-    }'''
-
-    heating_json = '''{
-        "уровень нагрева": [
-            {"id": "слабый", "points": [[0, 0], [4, 1], [6, 1], [10, 0]]},
-            {"id": "умеренный", "points": [[0, 0], [4, 0], [6, 1], [8, 1]]},
-            {"id": "интенсивный", "points": [[0, 0], [6, 0], [8, 1], [10, 1]]}
-        ]
-    }'''
-
-    rules_json = '''{
-        "управление": [
-            {"if": "холодно", "then": "интенсивный"},
-            {"if": "комфортно", "then": "умеренный"},
-            {"if": "жарко", "then": "слабый"}
-        ]
-    }'''
-
-    current_temp = 20.0
-    heating_level = task(temp_json, heating_json, rules_json, current_temp)
-    print(f'Temperature: {current_temp}°C, Heating level: {heating_level}')
+    string1 = '[1,[2,3],4,[5,6,7],8,9,10]'
+    string2 = '[[1,2],[3,4,5],6,7,9,[8,10]]'
+    results = task(string1, string2)
+    print(results)
